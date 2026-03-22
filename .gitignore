@@ -1,0 +1,11 @@
+# Security
+*.key
+*.pem
+
+# Certificates (Users should generate their own)
+*.crt
+
+# Environments & OS
+.venv/
+__pycache__/
+.DS_Store
