@@ -19,6 +19,7 @@ Client commands:
 * `/ping` → server replies with `pong`
 * `/info` → server replies with negotiated TLS info
 * `/quit` → close session
+* `/screenshot` → saves a **local** PNG screenshot to `./screenshots/` (requires Pillow)
 * Any other text → echoed back as `{"type":"echo","text":"..."}`
 
 ### Optional: Mutual TLS (mTLS)

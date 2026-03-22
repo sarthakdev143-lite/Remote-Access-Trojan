@@ -3,6 +3,8 @@ import json
 import socket
 import ssl
 import struct
+from datetime import datetime
+from pathlib import Path
 from collections.abc import Mapping
 
 DEFAULT_HOST = "127.0.0.1"
@@ -11,6 +13,7 @@ DEFAULT_SERVER_NAME = "localhost"
 DEFAULT_CA_FILE = "server.crt"
 DEFAULT_CLIENT_CERT = "client.crt"
 DEFAULT_CLIENT_KEY = "client.key"
+DEFAULT_SCREENSHOT_DIR = "screenshots"
 
 MAX_FRAME_BYTES = 1024 * 1024  # 1 MiB
 
@@ -68,7 +71,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-key", default=DEFAULT_CLIENT_KEY)
     parser.add_argument("--use-client-cert", action="store_true")
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--screenshot-dir", default=DEFAULT_SCREENSHOT_DIR)
     return parser.parse_args()
+
+
+def save_local_screenshot(*, out_dir: str) -> Path:
+    """
+    Captures the *local* screen and saves it to disk.
+
+    For safety, this project intentionally does NOT send screenshots over the network.
+    """
+    try:
+        from PIL import ImageGrab  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Screenshot support requires Pillow. Install it with: pip install pillow"
+        ) from exc
+
+    directory = Path(out_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = directory / f"screenshot-{timestamp}.png"
+
+    image = ImageGrab.grab()
+    image.save(path, format="PNG")
+    return path
 
 
 def main() -> None:
@@ -89,7 +117,7 @@ def main() -> None:
                 f"[*] Connected to {args.host}:{args.port} "
                 f"with {tls_sock.version()} ({cipher_name})"
             )
-            print("[*] Commands: /ping  /info  /quit")
+            print("[*] Commands: /ping  /info  /quit  /screenshot")
 
             while True:
                 try:
@@ -110,6 +138,15 @@ def main() -> None:
                     except Exception:
                         pass
                     return
+
+                if line == "/screenshot":
+                    try:
+                        path = save_local_screenshot(out_dir=args.screenshot_dir)
+                    except RuntimeError as exc:
+                        print(f"[!] {exc}")
+                        continue
+                    print(f"[*] Saved local screenshot: {path}")
+                    continue
 
                 if line == "/ping":
                     send_json(tls_sock, {"type": "ping"})
