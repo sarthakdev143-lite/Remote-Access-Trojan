@@ -1,6 +1,6 @@
 # TLS Demo Server Configuration (#7)
 server:
-  host: "127.0.0.1"
+  host: "0.0.0.0" 
   port: 6767
   cert_file: "server.crt"
   key_file: "server.key"
@@ -22,7 +22,7 @@ protocol:
   compress_threshold: 512  # bytes
 
 logging:
-  level: "INFO"
+  level: "DEBUG"
   file: "server.log"
 
 reconnect:              # client-side backoff config (#13)
@@ -37,8 +37,9 @@ reconnect:              # client-side backoff config (#13)
 # Clients on other networks connect to: portmap.io:<remote_port>
 tunnel:
   enabled: true
-  key_file: "~/.ssh/johnthehecker143.first"
+  key_file: "C:/Users/umesh/.ssh/johnthehecker143_rsa.pem"
   username: "johnthehecker143.first"
-  remote_host: "johnthehecker143-41843.portmap.host"
-  remote_port: 41843
+  remote_host: "johnthehecker143-47209.portmap.host"
+  remote_port: 47209
   local_port: 6767
+  restart_delay: 10

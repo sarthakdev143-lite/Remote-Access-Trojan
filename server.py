@@ -1,5 +1,5 @@
 """
-server.py — Async TLS server
+server.py - Async TLS server
 #1  Heartbeat (auto ping every 30s, drop on timeout)
 #2  Client IDs (UUID from hello)
 #3  Command queue (per-client async queue)
@@ -31,7 +31,7 @@ from config_loader import ServerConfig
 from protocol import make_env, recv_envelope, send_envelope
 from tunnel import PortmapTunnel, TunnelConfig, start_tunnel
 
-# ── Logging (#6) ──────────────────────────────────────────────────────────────
+# -- Logging (#6) --------------------------------------------------------------
 def setup_logging(cfg: ServerConfig):
     logging.basicConfig(
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
@@ -44,7 +44,7 @@ def setup_logging(cfg: ServerConfig):
 
 log = logging.getLogger("tls_server")
 
-# ── Session (#2 client IDs, #8 groups) ───────────────────────────────────────
+# -- Session (#2 client IDs, #8 groups) ---------------------------------------
 @dataclass
 class Session:
     client_id: str          # UUID from hello
@@ -55,7 +55,7 @@ class Session:
     connected_at: float = field(default_factory=time.time)
     group: str = "default"
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # ── #3 Command queue ──────────────────────────────────────────────────────
+    # -- #3 Command queue ------------------------------------------------------
     cmd_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     last_pong: float = field(default_factory=time.time)
 
@@ -89,7 +89,7 @@ def _next_seq() -> int:
     return _seq
 
 
-# ── TLS context ───────────────────────────────────────────────────────────────
+# -- TLS context ---------------------------------------------------------------
 import ssl
 
 def make_tls_context(cfg: ServerConfig) -> ssl.SSLContext:
@@ -104,13 +104,13 @@ def make_tls_context(cfg: ServerConfig) -> ssl.SSLContext:
     return ctx
 
 
-# ── Send helper ───────────────────────────────────────────────────────────────
+# -- Send helper ---------------------------------------------------------------
 async def send(session: Session, env: pb.Envelope, compress: bool = True) -> None:
     async with session.lock:
         await send_envelope(session.writer, env, compress)
 
 
-# ── Request/response ──────────────────────────────────────────────────────────
+# -- Request/response ----------------------------------------------------------
 async def request(session: Session, env: pb.Envelope, cfg: ServerConfig, timeout: float = 30.0) -> pb.Envelope:
     qid = str(uuid.uuid4())
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -121,7 +121,7 @@ async def request(session: Session, env: pb.Envelope, cfg: ServerConfig, timeout
     return await asyncio.wait_for(fut, timeout=timeout)
 
 
-# ── #1 Heartbeat ──────────────────────────────────────────────────────────────
+# -- #1 Heartbeat --------------------------------------------------------------
 async def heartbeat_loop(session: Session, cfg: ServerConfig) -> None:
     while True:
         await asyncio.sleep(cfg.heartbeat_interval)
@@ -139,14 +139,14 @@ async def heartbeat_loop(session: Session, cfg: ServerConfig) -> None:
                     break
                 await asyncio.sleep(1)
             else:
-                log.warning(f"Heartbeat timeout — dropping client {session.seq_id}")
+                log.warning(f"Heartbeat timeout - dropping client {session.seq_id}")
                 session.writer.close()
                 return
         except Exception:
             return
 
 
-# ── Client connection handler ─────────────────────────────────────────────────
+# -- Client connection handler -------------------------------------------------
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, cfg: ServerConfig) -> None:
     peer = writer.get_extra_info("peername", ("?", 0))
     addr_str = f"{peer[0]}:{peer[1]}"
@@ -163,7 +163,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         writer.close()
         return
 
-    # ── #9 Auth token ─────────────────────────────────────────────────────────
+    # -- #9 Auth token ---------------------------------------------------------
     hello = env.hello
     if hello.auth_token != cfg.auth_token:
         log.warning(f"Auth failed from {addr_str}")
@@ -195,7 +195,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     # Start heartbeat task
     hb_task = asyncio.create_task(heartbeat_loop(session, cfg))
 
-    # ── Receive loop ──────────────────────────────────────────────────────────
+    # -- Receive loop ----------------------------------------------------------
     try:
         while True:
             incoming = await recv_envelope(reader)
@@ -203,6 +203,13 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
             if kind == "pong":
                 session.last_pong = time.time()
+                # Also resolve any pending ping request
+                pending = getattr(session.cmd_queue, "_pending", {})
+                for key, fut in list(pending.items()):
+                    if not fut.done():
+                        fut.set_result(incoming)
+                        del pending[key]
+                        break
 
             elif kind == "ping":
                 r = make_env("server")
@@ -221,7 +228,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 if matched:
                     del pending[matched]
                 else:
-                    # Unsolicited — put on queue (#3)
+                    # Unsolicited - put on queue (#3)
                     await session.cmd_queue.put(incoming)
 
     except Exception as exc:
@@ -237,7 +244,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         log.info(f"Client {session.seq_id} removed")
 
 
-# ── #9 Message routing ────────────────────────────────────────────────────────
+# -- #9 Message routing --------------------------------------------------------
 async def broadcast(env: pb.Envelope, cfg: ServerConfig, exclude: str = "") -> None:
     async with sessions_lock:
         targets = [s for s in sessions.values() if s.client_id != exclude]
@@ -258,7 +265,7 @@ async def group_send(group: str, env: pb.Envelope, cfg: ServerConfig) -> None:
             pass
 
 
-# ── High-level commands ───────────────────────────────────────────────────────
+# -- High-level commands -------------------------------------------------------
 async def do_request(session: Session, env: pb.Envelope, cfg: ServerConfig, timeout: float = 35.0) -> pb.Envelope:
     pending = session.cmd_queue._pending = getattr(session.cmd_queue, "_pending", {})
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -272,7 +279,7 @@ async def do_request(session: Session, env: pb.Envelope, cfg: ServerConfig, time
         raise
 
 
-# ── Web dashboard (#10) ───────────────────────────────────────────────────────
+# -- Web dashboard (#10) -------------------------------------------------------
 DASH_HTML = """\
 <!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta http-equiv="refresh" content="5">
@@ -285,7 +292,7 @@ th{{background:#161b22;color:#58a6ff}}
 tr:nth-child(even){{background:#161b22}}
 .g{{color:#3fb950}}.badge{{background:#238636;padding:2px 8px;border-radius:4px;font-size:.8em}}
 </style></head><body>
-<h1>🔒 TLS Server Dashboard</h1>
+<h1>[TLS] TLS Server Dashboard</h1>
 <p>Auto-refresh every 5s &nbsp;|&nbsp; <span class="badge">LIVE</span> &nbsp;|&nbsp; Clients: <b>{count}</b></p>
 <table><thead><tr>
 <th>ID</th><th>UUID</th><th>Group</th><th>Address</th>
@@ -323,12 +330,12 @@ async def run_dashboard(cfg: ServerConfig) -> None:
             writer.close()
 
     srv = await asyncio.start_server(handle_http, cfg.host, cfg.dashboard_port)
-    log.info(f"Dashboard → http://{cfg.host}:{cfg.dashboard_port}")
+    log.info(f"Dashboard -> http://{cfg.host}:{cfg.dashboard_port}")
     async with srv:
         await srv.serve_forever()
 
 
-# ── Admin CLI ─────────────────────────────────────────────────────────────────
+# -- Admin CLI -----------------------------------------------------------------
 def _get_session_by_input(token: str) -> Optional[Session]:
     """Accept seq_id (int) or UUID prefix."""
     try:
@@ -363,7 +370,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
         if line in {"exit", "quit"}:
             break
 
-        # ── clients (#5) ───────────────────────────────────────────────────
+        # -- clients (#5) ---------------------------------------------------
         if line == "clients":
             async with sessions_lock:
                 items = list(sessions.values())
@@ -373,7 +380,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                 print(f"  {s.seq_id:>3} [{s.client_id[:8]}] {s.group:12} {s.hello.hostname}/{s.hello.username} {s.addr}")
             continue
 
-        # ── groups (#8) ────────────────────────────────────────────────────
+        # -- groups (#8) ----------------------------------------------------
         if line == "groups":
             async with sessions_lock:
                 g: dict[str, list] = {}
@@ -403,7 +410,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                 return None
             return active
 
-        # ── ping ───────────────────────────────────────────────────────────
+        # -- ping -----------------------------------------------------------
         if line == "ping":
             s = need()
             if s:
@@ -415,7 +422,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     print(f"[!] {exc}")
             continue
 
-        # ── info ───────────────────────────────────────────────────────────
+        # -- info -----------------------------------------------------------
         if line == "info":
             s = need()
             if s:
@@ -432,7 +439,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     print(f"[!] {exc}")
             continue
 
-        # ── echo ───────────────────────────────────────────────────────────
+        # -- echo -----------------------------------------------------------
         if line.startswith("echo "):
             s = need()
             if s:
@@ -444,7 +451,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     print(f"[!] {exc}")
             continue
 
-        # ── #2 exec with queue_id ──────────────────────────────────────────
+        # -- #2 exec with queue_id ------------------------------------------
         if line.startswith("exec "):
             s = need()
             if s:
@@ -462,7 +469,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     print(f"[!] {exc}")
             continue
 
-        # ── file_get ───────────────────────────────────────────────────────
+        # -- file_get -------------------------------------------------------
         if line.startswith("file_get "):
             parts = line.split(maxsplit=2)
             remote = parts[1]; local = parts[2] if len(parts) > 2 else os.path.basename(remote)
@@ -474,13 +481,13 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     r = await do_request(s, env, cfg, timeout=60.0)
                     fh = r.file_header
                     Path(local).write_bytes(fh.data)
-                    print(f"[+] Saved {len(fh.data)} bytes → {local}")
+                    print(f"[+] Saved {len(fh.data)} bytes -> {local}")
                     log.info(f"file_get client={s.seq_id} remote={remote} local={local} size={len(fh.data)}")
                 except Exception as exc:
                     print(f"[!] {exc}")
             continue
 
-        # ── file_put ───────────────────────────────────────────────────────
+        # -- file_put -------------------------------------------------------
         if line.startswith("file_put "):
             parts = line.split(maxsplit=2)
             if len(parts) < 3:
@@ -493,13 +500,13 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     env = make_env("server")
                     env.file_header.CopyFrom(pb.FileHeader(path=remote, size=len(data), data=data, push=True))
                     r = await do_request(s, env, cfg, timeout=60.0)
-                    print(f"[+] Pushed {len(data)} bytes → {remote}")
+                    print(f"[+] Pushed {len(data)} bytes -> {remote}")
                     log.info(f"file_put client={s.seq_id} local={local} remote={remote} size={len(data)}")
                 except Exception as exc:
                     print(f"[!] {exc}")
             continue
 
-        # ── screenshot ─────────────────────────────────────────────────────
+        # -- screenshot -----------------------------------------------------
         if line.startswith("screenshot"):
             parts = line.split(maxsplit=1)
             out = parts[1] if len(parts) > 1 else f"shot_{int(time.time())}.png"
@@ -510,7 +517,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     r = await do_request(s, env, cfg, timeout=30.0)
                     if r.HasField("screenshot_data"):
                         Path(out).write_bytes(r.screenshot_data.data)
-                        print(f"[+] Screenshot → {out} ({len(r.screenshot_data.data)} bytes)")
+                        print(f"[+] Screenshot -> {out} ({len(r.screenshot_data.data)} bytes)")
                         log.info(f"screenshot client={s.seq_id} file={out}")
                     else:
                         print(f"[!] {r.error_msg.error}")
@@ -518,7 +525,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                     print(f"[!] {exc}")
             continue
 
-        # ── #3 queue — show pending items ──────────────────────────────────
+        # -- #3 queue - show pending items ----------------------------------
         if line == "queue":
             s = need()
             if s:
@@ -526,7 +533,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
                 print(f"Pending responses: {len(pending)} | Queue size: {s.cmd_queue.qsize()}")
             continue
 
-        # ── #9 broadcast ───────────────────────────────────────────────────
+        # -- #9 broadcast ---------------------------------------------------
         if line.startswith("broadcast "):
             text = line[10:]
             env = make_env("server"); env.echo_request.CopyFrom(pb.EchoRequest(text=text))
@@ -534,7 +541,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
             print(f"[*] Broadcast sent to all clients")
             continue
 
-        # ── #9 groupsend <group> <msg> ─────────────────────────────────────
+        # -- #9 groupsend <group> <msg> -------------------------------------
         if line.startswith("groupsend "):
             parts = line.split(maxsplit=2)
             if len(parts) < 3:
@@ -559,7 +566,7 @@ async def admin_loop(cfg: ServerConfig) -> None:
         print(f"Commands: {HELP}")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# -- Entry point ---------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="config.yaml")
@@ -588,19 +595,21 @@ async def async_main() -> None:
     server = await asyncio.start_server(_handle, cfg.host, cfg.port, ssl=tls_ctx)
     log.info(f"TLS server on {cfg.host}:{cfg.port}")
 
-    # ── Portmap.io tunnel ─────────────────────────────────────────────────────
+    # -- Portmap.io tunnel -----------------------------------------------------
     tunnel: PortmapTunnel | None = None
     if cfg.tunnel_enabled:
         tcfg = TunnelConfig(
             enabled=True,
-            api_key=cfg.tunnel_api_key,
+            key_file=cfg.tunnel_key_file,
+            username=cfg.tunnel_username,
+            remote_host=cfg.tunnel_remote_host,
             remote_port=cfg.tunnel_remote_port,
             local_port=cfg.tunnel_local_port,
             restart_delay=cfg.tunnel_restart_delay,
         )
         tunnel = await start_tunnel(tcfg)
     else:
-        log.info("Tunnel disabled — local only. Set tunnel.enabled=true in config.yaml to expose globally.")
+        log.info("Tunnel disabled - local only. Set tunnel.enabled=true in config.yaml to expose globally.")
 
     try:
         async with server:

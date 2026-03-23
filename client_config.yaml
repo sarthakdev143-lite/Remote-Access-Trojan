@@ -1,10 +1,13 @@
 # TLS Demo Client Configuration (#7)
+# server:
+#   host: "127.0.0.1"
+#   port: 6767
+#   server_name: "localhost"
+#   ca_file: "ca.crt"
 server:
-  # host: "127.0.0.1"           # change to portmap.io when using tunnel
-  host: "johnthehecker143-41843.portmap.host"          
-  port: 41843                   # match tunnel.remote_port on server
-  # server_name: "localhost"    # change to portmap.io when using tunnel
-  server_name: "johnthehecker143-41843.portmap.host"    
+  host: "johnthehecker143-47209.portmap.host"
+  port: 47209
+  server_name: "localhost"
   ca_file: "ca.crt"
 
 auth:

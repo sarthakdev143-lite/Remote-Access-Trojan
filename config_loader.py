@@ -46,8 +46,10 @@ class ServerConfig:
     log_file: str = "server.log"
     # tunnel (portmap.io)
     tunnel_enabled: bool = False
-    tunnel_api_key: str = ""
-    tunnel_remote_port: int = 6767
+    tunnel_key_file: str = ""
+    tunnel_username: str = ""
+    tunnel_remote_host: str = ""
+    tunnel_remote_port: int = 0
     tunnel_local_port: int = 6767
     tunnel_restart_delay: float = 10.0
 
@@ -74,11 +76,13 @@ class ServerConfig:
         c.log_level = lg.get("level", c.log_level)
         c.log_file = lg.get("file", c.log_file)
         t = raw.get("tunnel", {})
-        c.tunnel_enabled = t.get("enabled", c.tunnel_enabled)
-        c.tunnel_api_key = t.get("api_key", c.tunnel_api_key)
-        c.tunnel_remote_port = t.get("remote_port", c.tunnel_remote_port)
-        c.tunnel_local_port = t.get("local_port", c.tunnel_local_port)
-        c.tunnel_restart_delay = t.get("restart_delay", c.tunnel_restart_delay)
+        c.tunnel_enabled       = t.get("enabled",      c.tunnel_enabled)
+        c.tunnel_key_file      = t.get("key_file",     c.tunnel_key_file)
+        c.tunnel_username      = t.get("username",     c.tunnel_username)
+        c.tunnel_remote_host   = t.get("remote_host",  c.tunnel_remote_host)
+        c.tunnel_remote_port   = t.get("remote_port",  c.tunnel_remote_port)
+        c.tunnel_local_port    = t.get("local_port",   c.tunnel_local_port)
+        c.tunnel_restart_delay = t.get("restart_delay",c.tunnel_restart_delay)
         return c
 
     def apply_args(self, args) -> None:
