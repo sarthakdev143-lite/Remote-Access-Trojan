@@ -1,6 +1,6 @@
 # TLS-Encrypted C2 Demo
 
-A Python-based implementation of a secure client-server (C2) architecture using Transport Layer Security (TLS). Built as a TryHackMe challenge project.
+A Python-based implementation of a secure client-server (C2) architecture using Transport Layer Security (TLS).
 
 > **For educational purposes only.** Use only on systems you own or have explicit permission to test.
 
