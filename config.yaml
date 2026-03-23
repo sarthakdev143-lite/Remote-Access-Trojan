@@ -1,0 +1,44 @@
+# TLS Demo Server Configuration (#7)
+server:
+  host: "127.0.0.1"
+  port: 6767
+  cert_file: "server.crt"
+  key_file: "server.key"
+  ca_file: "ca.crt"
+  require_client_cert: false
+
+auth:
+  token: "changeme-token-1234"
+
+dashboard:
+  port: 8080
+
+heartbeat:
+  interval: 30          # seconds between auto ping/pong (#1)
+  timeout: 10           # seconds to wait for pong before dropping
+
+protocol:
+  compression: true     # zlib compress frames > threshold (#12)
+  compress_threshold: 512  # bytes
+
+logging:
+  level: "INFO"
+  file: "server.log"
+
+reconnect:              # client-side backoff config (#13)
+  initial_delay: 1.0
+  max_delay: 60.0
+  multiplier: 2.0
+  jitter: 0.3
+
+# ── Portmap.io Global Access ──────────────────────────────────────────────────
+# Get your API key from https://portmap.io/configurations/new
+# Free tier gives you a public TCP endpoint on portmap.io:<remote_port>
+# Clients on other networks connect to: portmap.io:<remote_port>
+tunnel:
+  enabled: true
+  key_file: "~/.ssh/johnthehecker143.first"
+  username: "johnthehecker143.first"
+  remote_host: "johnthehecker143-41843.portmap.host"
+  remote_port: 41843
+  local_port: 6767

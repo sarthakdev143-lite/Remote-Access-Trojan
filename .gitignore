@@ -1,11 +1,34 @@
-# Security
+# ── Private keys — NEVER commit these ────────────────────────────────────────
 *.key
 *.pem
 
-# Certificates (Users should generate their own)
+# ── Certificates (users generate their own with gen_certs.py) ────────────────
 *.crt
 
-# Environments & OS
-.venv/
+# ── Portmap SSH key ───────────────────────────────────────────────────────────
+*.first
+*.first.pem
+
+# ── Runtime artifacts ─────────────────────────────────────────────────────────
+server.log
+*.log
+screenshots/
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+
+# ── PyInstaller output ────────────────────────────────────────────────────────
+dist/
+build/
+*.spec.bak

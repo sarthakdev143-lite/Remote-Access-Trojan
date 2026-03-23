@@ -1,0 +1,29 @@
+# TLS Demo Client Configuration (#7)
+server:
+  # host: "127.0.0.1"           # change to portmap.io when using tunnel
+  host: "johnthehecker143-41843.portmap.host"          
+  port: 41843                   # match tunnel.remote_port on server
+  # server_name: "localhost"    # change to portmap.io when using tunnel
+  server_name: "johnthehecker143-41843.portmap.host"    
+  ca_file: "ca.crt"
+
+auth:
+  token: "changeme-token-1234"
+
+tls:
+  use_client_cert: false
+  client_cert: "client.crt"
+  client_key: "client.key"
+
+client:
+  group: "default"      # client group tag (#8)
+
+reconnect:              # exponential backoff (#13)
+  initial_delay: 1.0
+  max_delay: 60.0
+  multiplier: 2.0
+  jitter: 0.3
+
+protocol:
+  compression: true
+  compress_threshold: 512
